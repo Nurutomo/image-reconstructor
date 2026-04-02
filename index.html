@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image Reconstructor</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>🎨 Image Reconstructor</h1>
+    <p>Select an image, apply canvas manipulations, and compare before &amp; after.</p>
+  </header>
+
+  <main>
+    <!-- Upload Section -->
+    <section class="upload-section">
+      <label class="upload-label" for="imageInput">
+        <span class="upload-icon">📁</span>
+        <span id="uploadText">Click or drag &amp; drop an image here</span>
+        <input type="file" id="imageInput" accept="image/*" />
+      </label>
+    </section>
+
+    <!-- Controls Section -->
+    <section class="controls-section" id="controlsSection" hidden>
+      <div class="controls-grid">
+
+        <div class="control-group">
+          <label>Filter</label>
+          <select id="filterSelect">
+            <option value="none">None</option>
+            <option value="grayscale">Grayscale</option>
+            <option value="sepia">Sepia</option>
+            <option value="invert">Invert</option>
+            <option value="blur">Blur</option>
+            <option value="sharpen">Sharpen</option>
+            <option value="emboss">Emboss</option>
+            <option value="edge">Edge Detection</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label for="brightnessRange">Brightness <span id="brightnessVal">0</span></label>
+          <input type="range" id="brightnessRange" min="-150" max="150" value="0" />
+        </div>
+
+        <div class="control-group">
+          <label for="contrastRange">Contrast <span id="contrastVal">0</span></label>
+          <input type="range" id="contrastRange" min="-100" max="100" value="0" />
+        </div>
+
+        <div class="control-group">
+          <label for="saturationRange">Saturation <span id="saturationVal">100</span>%</label>
+          <input type="range" id="saturationRange" min="0" max="300" value="100" />
+        </div>
+
+        <div class="control-group">
+          <label for="hueRange">Hue Rotate <span id="hueVal">0</span>°</label>
+          <input type="range" id="hueRange" min="0" max="360" value="0" />
+        </div>
+
+        <div class="control-group">
+          <label for="opacityRange">Opacity <span id="opacityVal">100</span>%</label>
+          <input type="range" id="opacityRange" min="0" max="100" value="100" />
+        </div>
+
+      </div>
+
+      <div class="button-row">
+        <button id="applyBtn" class="btn btn-primary">✅ Apply</button>
+        <button id="resetBtn" class="btn btn-secondary">🔄 Reset</button>
+        <button id="downloadBtn" class="btn btn-accent">⬇️ Download</button>
+      </div>
+    </section>
+
+    <!-- Before / After Section -->
+    <section class="canvas-section" id="canvasSection" hidden>
+      <div class="canvas-container">
+        <div class="canvas-wrapper">
+          <h2>Before</h2>
+          <canvas id="beforeCanvas"></canvas>
+        </div>
+        <div class="divider"></div>
+        <div class="canvas-wrapper">
+          <h2>After</h2>
+          <canvas id="afterCanvas"></canvas>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
