@@ -72,19 +72,16 @@
     const naturalW = img.naturalWidth;
     const naturalH = img.naturalHeight;
 
-    const scale = Math.min(MAX_DIM / naturalW, MAX_DIM / naturalH, 1);
-    const drawW = Math.round(naturalW * scale);
-    const drawH = Math.round(naturalH * scale);
-    const side = Math.max(drawW, drawH);
+    const side = Math.max(naturalW, naturalH);
 
     canvas.width = side;
     canvas.height = side;
 
-    const offsetX = Math.floor((side - drawW) / 2);
-    const offsetY = Math.floor((side - drawH) / 2);
+    const offsetX = Math.floor((side - naturalW) / 2);
+    const offsetY = Math.floor((side - naturalH) / 2);
 
     ctx.clearRect(0, 0, side, side);
-    ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
+    ctx.drawImage(img, offsetX, offsetY, naturalW, naturalH);
   }
 
   function setPipelineCanvasSize(side) {
@@ -271,6 +268,9 @@
       u_resolution: {
         value: [rotateCanvas.width, rotateCanvas.height]
       },
+      u_slider: {
+        value: [parseFloat(rotationRange.value, 10) / 360 + 0.5, 0]
+      },
     });
 
     const output2 = webglFragment(gradeState, {
@@ -283,6 +283,9 @@
       },
       u_resolution: {
         value: [gradeCanvas.width, gradeCanvas.height]
+      },
+      u_slider: {
+        value: [parseFloat(gradeRange.value, 10) / 360 + 0.5, 0]
       },
     });
 
@@ -397,7 +400,7 @@
     const localY = (event.clientY - rect.top) / rect.height;
     mouseUniform.x = Math.min(1, Math.max(0, localX));
     mouseUniform.y = Math.min(1, Math.max(0, localY));
-    renderPipeline();
+    // renderPipeline();
   });
 
   bootstrap();
