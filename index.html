@@ -25,52 +25,16 @@
     <!-- Controls Section -->
     <section class="controls-section" id="controlsSection" hidden>
       <div class="controls-grid">
-
         <div class="control-group">
-          <label>Filter</label>
-          <select id="filterSelect">
-            <option value="none">None</option>
-            <option value="grayscale">Grayscale</option>
-            <option value="sepia">Sepia</option>
-            <option value="invert">Invert</option>
-            <option value="blur">Blur</option>
-            <option value="sharpen">Sharpen</option>
-            <option value="emboss">Emboss</option>
-            <option value="edge">Edge Detection</option>
-          </select>
+          <label for="rotationRange">Rotation <span id="rotationVal">0</span>°</label>
+          <input type="range" id="rotationRange" min="-180" max="180" value="0" />
         </div>
 
         <div class="control-group">
-          <label for="brightnessRange">Brightness <span id="brightnessVal">0</span></label>
-          <input type="range" id="brightnessRange" min="-150" max="150" value="0" />
+          <label for="gradeRange">1D Grade <span id="gradeVal">0</span></label>
+          <input type="range" id="gradeRange" min="-100" max="100" value="0" />
         </div>
 
-        <div class="control-group">
-          <label for="contrastRange">Contrast <span id="contrastVal">0</span></label>
-          <input type="range" id="contrastRange" min="-100" max="100" value="0" />
-        </div>
-
-        <div class="control-group">
-          <label for="saturationRange">Saturation <span id="saturationVal">100</span>%</label>
-          <input type="range" id="saturationRange" min="0" max="300" value="100" />
-        </div>
-
-        <div class="control-group">
-          <label for="hueRange">Hue Rotate <span id="hueVal">0</span>°</label>
-          <input type="range" id="hueRange" min="0" max="360" value="0" />
-        </div>
-
-        <div class="control-group">
-          <label for="opacityRange">Opacity <span id="opacityVal">100</span>%</label>
-          <input type="range" id="opacityRange" min="0" max="100" value="100" />
-        </div>
-
-      </div>
-
-      <div class="button-row">
-        <button id="applyBtn" class="btn btn-primary">✅ Apply</button>
-        <button id="resetBtn" class="btn btn-secondary">🔄 Reset</button>
-        <button id="downloadBtn" class="btn btn-accent">⬇️ Download</button>
       </div>
     </section>
 
@@ -81,9 +45,19 @@
           <h2>Before</h2>
           <canvas id="beforeCanvas"></canvas>
         </div>
-        <div class="divider"></div>
+
         <div class="canvas-wrapper">
-          <h2>After</h2>
+          <h2>Rotation</h2>
+          <canvas id="rotateCanvas"></canvas>
+        </div>
+
+        <div class="canvas-wrapper">
+          <h2>1D Grade</h2>
+          <canvas id="gradeCanvas"></canvas>
+        </div>
+
+        <div class="canvas-wrapper">
+          <h2>Final</h2>
           <canvas id="afterCanvas"></canvas>
         </div>
       </div>

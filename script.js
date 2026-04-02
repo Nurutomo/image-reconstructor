@@ -1,52 +1,41 @@
 /* =============================================================
    Image Reconstructor – script.js
-   Canvas-based image manipulation with before/after comparison
+   Multi-pass pipeline: Before -> Rotation -> 1D Grade -> Final
    ============================================================= */
 
 (function () {
   'use strict';
 
-  // ── DOM References ────────────────────────────────────────────
-  const imageInput      = document.getElementById('imageInput');
-  const uploadLabel     = document.querySelector('.upload-label');
-  const uploadText      = document.getElementById('uploadText');
+  const imageInput = document.getElementById('imageInput');
+  const uploadLabel = document.querySelector('.upload-label');
+  const uploadText = document.getElementById('uploadText');
   const controlsSection = document.getElementById('controlsSection');
-  const canvasSection   = document.getElementById('canvasSection');
+  const canvasSection = document.getElementById('canvasSection');
 
-  const filterSelect    = document.getElementById('filterSelect');
-  const brightnessRange = document.getElementById('brightnessRange');
-  const contrastRange   = document.getElementById('contrastRange');
-  const saturationRange = document.getElementById('saturationRange');
-  const hueRange        = document.getElementById('hueRange');
-  const opacityRange    = document.getElementById('opacityRange');
+  const rotationRange = document.getElementById('rotationRange');
+  const rotationVal = document.getElementById('rotationVal');
+  const gradeRange = document.getElementById('gradeRange');
+  const gradeVal = document.getElementById('gradeVal');
 
-  const brightnessVal   = document.getElementById('brightnessVal');
-  const contrastVal     = document.getElementById('contrastVal');
-  const saturationVal   = document.getElementById('saturationVal');
-  const hueVal          = document.getElementById('hueVal');
-  const opacityVal      = document.getElementById('opacityVal');
+  const beforeCanvas = document.getElementById('beforeCanvas');
+  const rotateCanvas = document.getElementById('rotateCanvas');
+  const gradeCanvas = document.getElementById('gradeCanvas');
+  const afterCanvas = document.getElementById('afterCanvas');
 
-  const applyBtn        = document.getElementById('applyBtn');
-  const resetBtn        = document.getElementById('resetBtn');
-  const downloadBtn     = document.getElementById('downloadBtn');
+  const beforeCtx = beforeCanvas.getContext('2d');
+  const afterCtx = afterCanvas.getContext('2d');
 
-  const beforeCanvas    = document.getElementById('beforeCanvas');
-  const afterCanvas     = document.getElementById('afterCanvas');
-  const beforeCtx       = beforeCanvas.getContext('2d');
-  const afterCtx        = afterCanvas.getContext('2d');
+  const DEFAULT_IMAGE_PATH = 'default-image.svg';
+  const VERTEX_SHADER_PATH = 'shaders/rot.vert.glsl';
+  const ROT_FRAGMENT_SHADER_PATH = 'shaders/rot.frag.glsl';
+  const GRADE_FRAGMENT_SHADER_PATH = 'shaders/grade.frag.glsl';
 
-  // ── State ─────────────────────────────────────────────────────
-  let originalImage = null;   // HTMLImageElement of the loaded picture
-  let originalImageData = null; // ImageData snapshot for pixel operations
+  const MAX_DIM = 800;
 
-  // ── Helpers ───────────────────────────────────────────────────
+  let rotateState = null;
+  let gradeState = null;
+  let mouseUniform = { x: 0.5, y: 0.5 };
 
-  /** Clamp a value to [min, max]. */
-  function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, value));
-  }
-
-  /** Load an image File into an HTMLImageElement. */
   function loadImageFromFile(file) {
     return new Promise(function (resolve, reject) {
       const url = URL.createObjectURL(file);
@@ -60,376 +49,356 @@
     });
   }
 
-  /** Draw an image onto a canvas, scaling to fit within MAX_DIM. */
-  const MAX_DIM = 800;
-
-  function drawImageToCanvas(canvas, ctx, img) {
-    let w = img.naturalWidth;
-    let h = img.naturalHeight;
-    if (w > MAX_DIM || h > MAX_DIM) {
-      const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
-      w = Math.round(w * ratio);
-      h = Math.round(h * ratio);
-    }
-    canvas.width  = w;
-    canvas.height = h;
-    ctx.drawImage(img, 0, 0, w, h);
+  function loadImageFromUrl(url) {
+    return new Promise(function (resolve, reject) {
+      const img = new Image();
+      img.onload = function () {
+        resolve(img);
+      };
+      img.onerror = reject;
+      img.src = url;
+    });
   }
 
-  // ── Image Loading ─────────────────────────────────────────────
+  async function loadTextFile(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error('Failed to load: ' + url);
+    }
+    return response.text();
+  }
+
+  function drawImageToCanvas(canvas, ctx, img) {
+    const naturalW = img.naturalWidth;
+    const naturalH = img.naturalHeight;
+
+    const scale = Math.min(MAX_DIM / naturalW, MAX_DIM / naturalH, 1);
+    const drawW = Math.round(naturalW * scale);
+    const drawH = Math.round(naturalH * scale);
+    const side = Math.max(drawW, drawH);
+
+    canvas.width = side;
+    canvas.height = side;
+
+    const offsetX = Math.floor((side - drawW) / 2);
+    const offsetY = Math.floor((side - drawH) / 2);
+
+    ctx.clearRect(0, 0, side, side);
+    ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
+  }
+
+  function setPipelineCanvasSize(side) {
+    rotateCanvas.width = side;
+    rotateCanvas.height = side;
+    gradeCanvas.width = side;
+    gradeCanvas.height = side;
+    afterCanvas.width = side;
+    afterCanvas.height = side;
+  }
+
+  function createShader(glContext, type, source) {
+    const shader = glContext.createShader(type);
+    glContext.shaderSource(shader, source);
+    glContext.compileShader(shader);
+
+    if (!glContext.getShaderParameter(shader, glContext.COMPILE_STATUS)) {
+      const info = glContext.getShaderInfoLog(shader);
+      glContext.deleteShader(shader);
+      throw new Error(info || 'WebGL shader compile error');
+    }
+
+    return shader;
+  }
+
+  function createProgram(glContext, vertexSource, fragmentSource) {
+    const vertexShader = createShader(glContext, glContext.VERTEX_SHADER, vertexSource);
+    const fragmentShader = createShader(glContext, glContext.FRAGMENT_SHADER, fragmentSource);
+    const program = glContext.createProgram();
+
+    glContext.attachShader(program, vertexShader);
+    glContext.attachShader(program, fragmentShader);
+    glContext.linkProgram(program);
+
+    glContext.deleteShader(vertexShader);
+    glContext.deleteShader(fragmentShader);
+
+    if (!glContext.getProgramParameter(program, glContext.LINK_STATUS)) {
+      const info = glContext.getProgramInfoLog(program);
+      glContext.deleteProgram(program);
+      throw new Error(info || 'WebGL program link error');
+    }
+
+    return program;
+  }
+
+  function createPass(canvas, vertexSource, fragmentSource) {
+    const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true, premultipliedAlpha: false });
+    if (!gl) {
+      throw new Error('Unable to create WebGL context for ' + canvas.id + '.');
+    }
+
+    const program = createProgram(gl, vertexSource, fragmentSource);
+    const positionLocation = gl.getAttribLocation(program, 'a_position');
+    const texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
+
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+        -1,  1,
+         1, -1,
+         1,  1
+      ]),
+      gl.STATIC_DRAW
+    );
+
+    const texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([
+        0, 0,
+        1, 0,
+        0, 1,
+        0, 1,
+        1, 0,
+        1, 1
+      ]),
+      gl.STATIC_DRAW
+    );
+
+    return {
+      canvas,
+      gl,
+      program,
+      positionLocation,
+      texCoordLocation,
+      positionBuffer,
+      texCoordBuffer,
+      textures: {}
+    };
+  }
+
+  function getPassTexture(pass, name) {
+    if (pass.textures[name]) return pass.textures[name];
+
+    const texture = pass.gl.createTexture();
+    pass.gl.bindTexture(pass.gl.TEXTURE_2D, texture);
+    pass.gl.texParameteri(pass.gl.TEXTURE_2D, pass.gl.TEXTURE_WRAP_S, pass.gl.CLAMP_TO_EDGE);
+    pass.gl.texParameteri(pass.gl.TEXTURE_2D, pass.gl.TEXTURE_WRAP_T, pass.gl.CLAMP_TO_EDGE);
+    pass.gl.texParameteri(pass.gl.TEXTURE_2D, pass.gl.TEXTURE_MIN_FILTER, pass.gl.LINEAR);
+    pass.gl.texParameteri(pass.gl.TEXTURE_2D, pass.gl.TEXTURE_MAG_FILTER, pass.gl.LINEAR);
+    pass.textures[name] = texture;
+    return texture;
+  }
+
+  function webglFragment(pass, uniforms) {
+    const gl = pass.gl;
+
+    gl.viewport(0, 0, pass.canvas.width, pass.canvas.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(pass.program);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, pass.positionBuffer);
+    gl.enableVertexAttribArray(pass.positionLocation);
+    gl.vertexAttribPointer(pass.positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, pass.texCoordBuffer);
+    gl.enableVertexAttribArray(pass.texCoordLocation);
+    gl.vertexAttribPointer(pass.texCoordLocation, 2, gl.FLOAT, false, 0, 0);
+
+    let textureUnit = 0;
+
+    Object.keys(uniforms).forEach(function (name) {
+      const location = gl.getUniformLocation(pass.program, name);
+      if (!location) return;
+
+      const uniform = uniforms[name];
+
+      if (uniform && uniform.source) {
+        const texture = getPassTexture(pass, name);
+        gl.activeTexture(gl.TEXTURE0 + textureUnit);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, uniform.flipY === true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, uniform.source);
+        gl.uniform1i(location, textureUnit);
+        textureUnit += 1;
+        return;
+      }
+
+      if (uniform && Array.isArray(uniform.value) && uniform.value.length === 2) {
+        gl.uniform2f(location, uniform.value[0], uniform.value[1]);
+        return;
+      }
+
+      if (uniform && typeof uniform.value === 'number') {
+        gl.uniform1f(location, uniform.value);
+      }
+    });
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    return pass.canvas;
+  }
+
+  async function initRenderers() {
+    if (!window.WebGLRenderingContext) {
+      throw new Error('WebGL API is not supported by this browser.');
+    }
+
+    const [vertexSource, rotFragmentSource, gradeFragmentSource] = await Promise.all([
+      loadTextFile(VERTEX_SHADER_PATH),
+      loadTextFile(ROT_FRAGMENT_SHADER_PATH),
+      loadTextFile(GRADE_FRAGMENT_SHADER_PATH)
+    ]);
+
+    rotateState = createPass(rotateCanvas, vertexSource, rotFragmentSource);
+    gradeState = createPass(gradeCanvas, vertexSource, gradeFragmentSource);
+  }
+
+  function renderPipeline() {
+    if (!rotateState || !gradeState) return;
+
+    const output1 = webglFragment(rotateState, {
+      u_image: {
+        source: beforeCanvas,
+        flipY: true
+      },
+      u_resolution: {
+        value: [rotateCanvas.width, rotateCanvas.height]
+      },
+    });
+
+    const output2 = webglFragment(gradeState, {
+      u_image: {
+        source: output1,
+        flipY: true
+      },
+      u_mouse: {
+        value: [mouseUniform.x, mouseUniform.y]
+      },
+      u_resolution: {
+        value: [gradeCanvas.width, gradeCanvas.height]
+      },
+    });
+
+    afterCtx.clearRect(0, 0, afterCanvas.width, afterCanvas.height);
+    afterCtx.drawImage(output2, 0, 0);
+  }
+
+  function resetControls() {
+    rotationRange.value = 0;
+    rotationVal.textContent = '0';
+    gradeRange.value = 0;
+    gradeVal.textContent = '0';
+  }
+
+  function initializeCanvasState(image) {
+    drawImageToCanvas(beforeCanvas, beforeCtx, image);
+    setPipelineCanvasSize(beforeCanvas.width);
+
+    if (!rotateState || !gradeState) return;
+
+    resetControls();
+    controlsSection.hidden = false;
+    canvasSection.hidden = false;
+    renderPipeline();
+  }
 
   async function handleFile(file) {
     if (!file || !file.type.startsWith('image/')) return;
 
     uploadText.textContent = file.name;
 
+    let image;
     try {
-      originalImage = await loadImageFromFile(file);
-    } catch (e) {
+      image = await loadImageFromFile(file);
+    } catch (error) {
       uploadText.textContent = 'Failed to load image. Please try another file.';
       return;
     }
 
-    // Draw "before" canvas
-    drawImageToCanvas(beforeCanvas, beforeCtx, originalImage);
-
-    // Snapshot original pixel data for manipulation
-    originalImageData = beforeCtx.getImageData(0, 0, beforeCanvas.width, beforeCanvas.height);
-
-    // Mirror "after" canvas dimensions
-    afterCanvas.width  = beforeCanvas.width;
-    afterCanvas.height = beforeCanvas.height;
-    afterCtx.putImageData(originalImageData, 0, 0);
-
-    // Show controls and canvases
-    controlsSection.hidden = false;
-    canvasSection.hidden   = false;
-
-    resetControls();
+    initializeCanvasState(image);
   }
 
-  imageInput.addEventListener('change', function (e) {
-    const file = e.target.files[0];
+  async function loadDefaultImage() {
+    try {
+      const image = await loadImageFromUrl(DEFAULT_IMAGE_PATH);
+      initializeCanvasState(image);
+      uploadText.textContent = 'Default image loaded';
+    } catch (error) {
+      uploadText.textContent = 'Click or drag & drop an image here';
+    }
+  }
+
+  async function bootstrap() {
+    let webglInitError = null;
+
+    try {
+      await initRenderers();
+    } catch (error) {
+      rotateState = null;
+      gradeState = null;
+      webglInitError = error;
+    }
+
+    if (!rotateState || !gradeState) {
+      const reason = webglInitError && webglInitError.message
+        ? webglInitError.message
+        : 'Unknown initialization error.';
+
+      uploadText.textContent = 'WebGL is required but unavailable: ' + reason;
+      imageInput.disabled = true;
+      console.error('WebGL initialization failed:', webglInitError || reason);
+      return;
+    }
+
+    loadDefaultImage();
+  }
+
+  imageInput.addEventListener('change', function (event) {
+    const file = event.target.files[0];
     if (file) handleFile(file);
   });
 
-  // Drag-and-drop support
-  uploadLabel.addEventListener('dragover', function (e) {
-    e.preventDefault();
+  uploadLabel.addEventListener('dragover', function (event) {
+    event.preventDefault();
     uploadLabel.classList.add('drag-over');
   });
+
   uploadLabel.addEventListener('dragleave', function () {
     uploadLabel.classList.remove('drag-over');
   });
-  uploadLabel.addEventListener('drop', function (e) {
-    e.preventDefault();
+
+  uploadLabel.addEventListener('drop', function (event) {
+    event.preventDefault();
     uploadLabel.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
+    const file = event.dataTransfer.files[0];
     if (file) handleFile(file);
   });
 
-  // ── Slider Live Labels ────────────────────────────────────────
-
-  brightnessRange.addEventListener('input', function () {
-    brightnessVal.textContent = this.value;
-  });
-  contrastRange.addEventListener('input', function () {
-    contrastVal.textContent = this.value;
-  });
-  saturationRange.addEventListener('input', function () {
-    saturationVal.textContent = this.value;
-  });
-  hueRange.addEventListener('input', function () {
-    hueVal.textContent = this.value;
-  });
-  opacityRange.addEventListener('input', function () {
-    opacityVal.textContent = this.value;
+  rotationRange.addEventListener('input', function () {
+    rotationVal.textContent = this.value;
+    renderPipeline();
   });
 
-  // ── Reset Controls ────────────────────────────────────────────
-
-  function resetControls() {
-    filterSelect.value    = 'none';
-    brightnessRange.value = 0;
-    contrastRange.value   = 0;
-    saturationRange.value = 100;
-    hueRange.value        = 0;
-    opacityRange.value    = 100;
-
-    brightnessVal.textContent = 0;
-    contrastVal.textContent   = 0;
-    saturationVal.textContent = 100;
-    hueVal.textContent        = 0;
-    opacityVal.textContent    = 100;
-  }
-
-  resetBtn.addEventListener('click', function () {
-    resetControls();
-    if (originalImageData) {
-      afterCtx.putImageData(originalImageData, 0, 0);
-    }
+  gradeRange.addEventListener('input', function () {
+    gradeVal.textContent = this.value;
+    renderPipeline();
   });
 
-  // ── Convolution Kernel Helpers ────────────────────────────────
-
-  /**
-   * Apply a 3×3 convolution kernel to the pixel data.
-   * Returns a new Uint8ClampedArray with the result.
-   */
-  function applyKernel(srcData, width, height, kernel, divisor, offset) {
-    divisor = divisor || 1;
-    offset  = offset  || 0;
-    const src = srcData.data;
-    const dst = new Uint8ClampedArray(src.length);
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        let r = 0, g = 0, b = 0;
-
-        for (let ky = -1; ky <= 1; ky++) {
-          for (let kx = -1; kx <= 1; kx++) {
-            const px = clamp(x + kx, 0, width  - 1);
-            const py = clamp(y + ky, 0, height - 1);
-            const idx = (py * width + px) * 4;
-            const kv  = kernel[(ky + 1) * 3 + (kx + 1)];
-            r += src[idx]     * kv;
-            g += src[idx + 1] * kv;
-            b += src[idx + 2] * kv;
-          }
-        }
-
-        const outIdx = (y * width + x) * 4;
-        dst[outIdx]     = clamp(r / divisor + offset, 0, 255);
-        dst[outIdx + 1] = clamp(g / divisor + offset, 0, 255);
-        dst[outIdx + 2] = clamp(b / divisor + offset, 0, 255);
-        dst[outIdx + 3] = src[outIdx + 3];  // preserve alpha
-      }
-    }
-    return dst;
-  }
-
-  // ── Pixel-Level Adjustments ───────────────────────────────────
-
-  /**
-   * Apply brightness offset to each channel.
-   * @param {Uint8ClampedArray} pixels
-   * @param {number} brightness  -150 … +150
-   */
-  function applyBrightness(pixels, brightness) {
-    if (brightness === 0) return;
-    for (let i = 0; i < pixels.length; i += 4) {
-      pixels[i]     = clamp(pixels[i]     + brightness, 0, 255);
-      pixels[i + 1] = clamp(pixels[i + 1] + brightness, 0, 255);
-      pixels[i + 2] = clamp(pixels[i + 2] + brightness, 0, 255);
-    }
-  }
-
-  /**
-   * Apply contrast using the standard (pixel - 128) * factor + 128 formula.
-   * @param {Uint8ClampedArray} pixels
-   * @param {number} contrast  -100 … +100
-   */
-  function applyContrast(pixels, contrast) {
-    if (contrast === 0) return;
-    const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
-    for (let i = 0; i < pixels.length; i += 4) {
-      pixels[i]     = clamp(factor * (pixels[i]     - 128) + 128, 0, 255);
-      pixels[i + 1] = clamp(factor * (pixels[i + 1] - 128) + 128, 0, 255);
-      pixels[i + 2] = clamp(factor * (pixels[i + 2] - 128) + 128, 0, 255);
-    }
-  }
-
-  /**
-   * Convert RGB to HSL.  Returns [h(0-360), s(0-1), l(0-1)].
-   */
-  function rgbToHsl(r, g, b) {
-    r /= 255; g /= 255; b /= 255;
-    const max = Math.max(r, g, b), min = Math.min(r, g, b);
-    const l = (max + min) / 2;
-    let h = 0, s = 0;
-    if (max !== min) {
-      const d = max - min;
-      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-      switch (max) {
-        case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
-        case g: h = ((b - r) / d + 2) / 6; break;
-        case b: h = ((r - g) / d + 4) / 6; break;
-      }
-    }
-    return [h * 360, s, l];
-  }
-
-  /**
-   * Convert HSL back to RGB.  h(0-360), s/l(0-1).
-   * Returns [r, g, b] each 0-255.
-   */
-  function hslToRgb(h, s, l) {
-    h /= 360;
-    function hue2rgb(p, q, t) {
-      if (t < 0) t += 1;
-      if (t > 1) t -= 1;
-      if (t < 1/6) return p + (q - p) * 6 * t;
-      if (t < 1/2) return q;
-      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-      return p;
-    }
-    if (s === 0) {
-      const v = Math.round(l * 255);
-      return [v, v, v];
-    }
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    return [
-      Math.round(hue2rgb(p, q, h + 1/3) * 255),
-      Math.round(hue2rgb(p, q, h)       * 255),
-      Math.round(hue2rgb(p, q, h - 1/3) * 255)
-    ];
-  }
-
-  /**
-   * Apply saturation and hue-rotation adjustments.
-   * @param {Uint8ClampedArray} pixels
-   * @param {number} saturation  0 … 300 (100 = no change)
-   * @param {number} hue         0 … 360 degrees
-   */
-  function applySaturationHue(pixels, saturation, hue) {
-    const satFactor = saturation / 100;
-    const hueShift  = hue;
-    if (satFactor === 1 && hueShift === 0) return;
-    for (let i = 0; i < pixels.length; i += 4) {
-      let [h, s, l] = rgbToHsl(pixels[i], pixels[i+1], pixels[i+2]);
-      if (satFactor !== 1) s = clamp(s * satFactor, 0, 1);
-      if (hueShift  !== 0) h = (h + hueShift) % 360;
-      const [nr, ng, nb] = hslToRgb(h, s, l);
-      pixels[i]     = nr;
-      pixels[i + 1] = ng;
-      pixels[i + 2] = nb;
-    }
-  }
-
-  /**
-   * Apply opacity (alpha) scale.
-   * @param {Uint8ClampedArray} pixels
-   * @param {number} opacity  0 … 100
-   */
-  function applyOpacity(pixels, opacity) {
-    if (opacity === 100) return;
-    const factor = opacity / 100;
-    for (let i = 3; i < pixels.length; i += 4) {
-      pixels[i] = Math.round(pixels[i] * factor);
-    }
-  }
-
-  /**
-   * Apply grayscale.
-   */
-  function applyGrayscale(pixels) {
-    for (let i = 0; i < pixels.length; i += 4) {
-      const gray = 0.299 * pixels[i] + 0.587 * pixels[i+1] + 0.114 * pixels[i+2];
-      pixels[i] = pixels[i+1] = pixels[i+2] = gray;
-    }
-  }
-
-  /**
-   * Apply sepia tone.
-   */
-  function applySepia(pixels) {
-    for (let i = 0; i < pixels.length; i += 4) {
-      const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
-      pixels[i]     = clamp(r * 0.393 + g * 0.769 + b * 0.189, 0, 255);
-      pixels[i + 1] = clamp(r * 0.349 + g * 0.686 + b * 0.168, 0, 255);
-      pixels[i + 2] = clamp(r * 0.272 + g * 0.534 + b * 0.131, 0, 255);
-    }
-  }
-
-  /**
-   * Invert all channels.
-   */
-  function applyInvert(pixels) {
-    for (let i = 0; i < pixels.length; i += 4) {
-      pixels[i]     = 255 - pixels[i];
-      pixels[i + 1] = 255 - pixels[i + 1];
-      pixels[i + 2] = 255 - pixels[i + 2];
-    }
-  }
-
-  // ── Named Kernels ─────────────────────────────────────────────
-
-  const KERNELS = {
-    blur: {
-      kernel:  [1, 2, 1,  2, 4, 2,  1, 2, 1],
-      divisor: 16
-    },
-    sharpen: {
-      kernel:  [0, -1, 0,  -1, 5, -1,  0, -1, 0],
-      divisor: 1
-    },
-    emboss: {
-      kernel:  [-2, -1, 0,  -1, 1, 1,  0, 1, 2],
-      divisor: 1,
-      offset:  128
-    },
-    edge: {
-      kernel:  [-1, -1, -1,  -1, 8, -1,  -1, -1, -1],
-      divisor: 1
-    }
-  };
-
-  // ── Apply All Adjustments ─────────────────────────────────────
-
-  function applyManipulations() {
-    if (!originalImageData) return;
-
-    const width  = afterCanvas.width;
-    const height = afterCanvas.height;
-
-    // Read current control values
-    const filter     = filterSelect.value;
-    const brightness = parseInt(brightnessRange.value, 10);
-    const contrast   = parseInt(contrastRange.value,   10);
-    const saturation = parseInt(saturationRange.value, 10);
-    const hue        = parseInt(hueRange.value,        10);
-    const opacity    = parseInt(opacityRange.value,    10);
-
-    // Deep-copy the original pixel data so we always start fresh
-    let imageData = new ImageData(
-      new Uint8ClampedArray(originalImageData.data),
-      width,
-      height
-    );
-
-    // 1. Apply convolution-based filters first (they need the full grid)
-    if (KERNELS[filter]) {
-      const cfg = KERNELS[filter];
-      const newData = applyKernel(imageData, width, height, cfg.kernel, cfg.divisor, cfg.offset);
-      imageData.data.set(newData);
-    }
-
-    // 2. Colour-mode filters
-    const pixels = imageData.data;
-    switch (filter) {
-      case 'grayscale': applyGrayscale(pixels); break;
-      case 'sepia':     applySepia(pixels);     break;
-      case 'invert':    applyInvert(pixels);    break;
-    }
-
-    // 3. Tonal / colour adjustments
-    applyBrightness(pixels, brightness);
-    applyContrast(pixels, contrast);
-    applySaturationHue(pixels, saturation, hue);
-    applyOpacity(pixels, opacity);
-
-    afterCtx.putImageData(imageData, 0, 0);
-  }
-
-  applyBtn.addEventListener('click', applyManipulations);
-
-  // ── Download ──────────────────────────────────────────────────
-
-  downloadBtn.addEventListener('click', function () {
-    const link = document.createElement('a');
-    link.download = 'reconstructed.png';
-    link.href = afterCanvas.toDataURL('image/png');
-    link.click();
+  gradeCanvas.addEventListener('mousemove', function (event) {
+    const rect = gradeCanvas.getBoundingClientRect();
+    const localX = (event.clientX - rect.left) / rect.width;
+    const localY = (event.clientY - rect.top) / rect.height;
+    mouseUniform.x = Math.min(1, Math.max(0, localX));
+    mouseUniform.y = Math.min(1, Math.max(0, localY));
+    renderPipeline();
   });
+
+  bootstrap();
 })();
